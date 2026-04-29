@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 log_conversation.py
-Reads the current session transcript and appends the last assistant
-response to prompt_log.md. Called by the Stop hook in settings.json.
+Reads the current session transcript and appends the full last assistant
+response turn to prompt_log.md. Called by the Stop hook in settings.json.
+
+A "turn" = all assistant text blocks since the most recent real user message,
+including text before AND after tool calls — capturing the complete response.
 """
 import sys
 import json
@@ -29,16 +32,20 @@ def find_transcript(session_id):
         path = os.path.join(PROJECT_DIR, f"{session_id}.jsonl")
         if os.path.exists(path):
             return path
-    # Fallback: most recently modified transcript
     files = glob.glob(os.path.join(PROJECT_DIR, "*.jsonl"))
     if files:
         return max(files, key=os.path.getmtime)
     return None
 
 
-def extract_last_assistant_text(transcript_path):
-    """Return the last assistant text message from the transcript."""
-    last_text = None
+def extract_last_turn_text(transcript_path):
+    """Return the full assistant text for the most recent response turn.
+
+    Collects every text block from every assistant entry that appears
+    after the last real user message, so multi-step tool-call responses
+    are logged in full rather than just the opening sentence.
+    """
+    entries = []
     try:
         with open(transcript_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -46,25 +53,46 @@ def extract_last_assistant_text(transcript_path):
                 if not line:
                     continue
                 try:
-                    entry = json.loads(line)
-                    msg = entry.get("message", {})
-                    if msg.get("role") == "assistant":
-                        content = msg.get("content", [])
-                        if isinstance(content, list):
-                            parts = [
-                                c["text"]
-                                for c in content
-                                if c.get("type") == "text" and c.get("text", "").strip()
-                            ]
-                            if parts:
-                                last_text = " ".join(parts)
-                        elif isinstance(content, str) and content.strip():
-                            last_text = content
+                    entries.append(json.loads(line))
                 except Exception:
                     continue
     except Exception:
-        pass
-    return last_text
+        return None
+
+    # Find the index of the last real user message (string content or text blocks)
+    last_user_idx = -1
+    for i in range(len(entries) - 1, -1, -1):
+        msg = entries[i].get("message", {})
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str) and content.strip():
+            last_user_idx = i
+            break
+        if isinstance(content, list) and any(
+            c.get("type") == "text" and c.get("text", "").strip() for c in content
+        ):
+            last_user_idx = i
+            break
+
+    if last_user_idx == -1:
+        return None
+
+    # Gather all assistant text blocks from the turn that followed
+    texts = []
+    for entry in entries[last_user_idx + 1:]:
+        msg = entry.get("message", {})
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if block.get("type") == "text" and block.get("text", "").strip():
+                    texts.append(block["text"].strip())
+        elif isinstance(content, str) and content.strip():
+            texts.append(content.strip())
+
+    return "\n\n".join(texts) if texts else None
 
 
 def append_response(text):
@@ -79,7 +107,7 @@ def main():
     transcript = find_transcript(session_id)
     if not transcript:
         return
-    text = extract_last_assistant_text(transcript)
+    text = extract_last_turn_text(transcript)
     if text:
         append_response(text)
 

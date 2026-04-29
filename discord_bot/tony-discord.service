@@ -1,0 +1,18 @@
+[Unit]
+Description=Tony Q&A Discord Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tony1
+WorkingDirectory=/home/tony1/Tony_the_Bot/discord_bot
+EnvironmentFile=/home/tony1/Tony_the_Bot/discord_bot/.env
+ExecStart=/usr/bin/python3 /home/tony1/Tony_the_Bot/discord_bot/bot.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

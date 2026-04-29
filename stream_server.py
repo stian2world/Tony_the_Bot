@@ -1,7 +1,6 @@
 from flask import Flask, Response, jsonify, send_from_directory
-from picamera2 import Picamera2
-from ultralytics import YOLO
-import libcamera
+import struct
+from multiprocessing.shared_memory import SharedMemory
 import cv2
 import threading
 import time
@@ -92,16 +91,6 @@ def estimate_runtime(soc, current_ma=500):
 
 app = Flask(__name__)
 
-cam = None
-model = None
-cam_lock = threading.Lock()
-
-raw_frame = None
-raw_frame_lock = threading.Lock()
-
-last_boxes = []
-boxes_lock = threading.Lock()
-
 latest_frame = None
 frame_lock = threading.Lock()
 
@@ -115,48 +104,6 @@ detections_lock = threading.Lock()
 sse_clients = []
 sse_lock = threading.Lock()
 
-
-def start_camera():
-    global cam
-    cam = Picamera2()
-    config = cam.create_video_configuration(
-        main={"size": (1920, 1080), "format": "RGB888"},
-        controls={
-            "FrameRate": 30,
-            "AwbEnable": True,
-            "AwbMode": libcamera.controls.AwbModeEnum.Indoor,
-            "AeEnable": True,
-            "AeMeteringMode": libcamera.controls.AeMeteringModeEnum.Matrix,
-            "AeExposureMode": libcamera.controls.AeExposureModeEnum.Normal,
-            "Sharpness": 1.0,
-            "Contrast": 1.0,
-            "Saturation": 1.0,
-            "Brightness": 0.0,
-            "NoiseReductionMode": libcamera.controls.draft.NoiseReductionModeEnum.Fast,
-        },
-        buffer_count=4,
-    )
-    cam.configure(config)
-    cam.start()
-    time.sleep(4)
-    print("Camera started — 640x480 @ 30fps")
-
-
-def load_model():
-    global model
-    model = YOLO("yolov8n.pt")
-    model.fuse()
-    print("YOLOv8n loaded and fused.")
-
-
-def draw_boxes(frame, boxes):
-    for (x1, y1, x2, y2, label) in boxes:
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-        cv2.rectangle(frame, (x1, y1 - th - 6), (x1 + tw + 4, y1), (0, 255, 0), -1)
-        cv2.putText(frame, label, (x1 + 2, y1 - 4),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
-    return frame
 
 
 def push_sse(data):
@@ -172,102 +119,79 @@ def push_sse(data):
             sse_clients.remove(q)
 
 
-def camera_loop():
-    global raw_frame, fps_camera
-    count, t0 = 0, time.time()
-    while True:
-        try:
-            with cam_lock:
-                frame = cam.capture_array()
-            with raw_frame_lock:
-                raw_frame = frame
-            count += 1
-            elapsed = time.time() - t0
-            if elapsed >= 2.0:
-                fps_camera = round(count / elapsed, 1)
-                count, t0 = 0, time.time()
-        except Exception as e:
-            print(f"[camera_loop error] {e}", flush=True)
-            time.sleep(0.1)
+def brain_reader_loop():
+    """Read annotated JPEG frames and detections from tony_brain shared memory.
 
+    tony_brain.py owns the camera and YOLO — it writes results to:
+      - shared memory 'tony_frame': [size:4B][seq:4B][jpeg:NB]
+      - /tmp/tony_state.json: fps + current detections
+    This loop forwards those to the Flask routes without touching the camera.
+    """
+    global latest_frame, latest_detections, fps_camera, fps_yolo, fps_stream
 
-def detection_loop():
-    global latest_detections, fps_yolo
+    SHM_NAME   = "tony_frame"
+    STATE_FILE = "/tmp/tony_state.json"
+
+    shm         = None
+    last_seq    = -1
     last_labels = set()
-    count, t0 = 0, time.time()
+    count, t0   = 0, time.time()
+
     while True:
         try:
-            with raw_frame_lock:
-                frame = raw_frame
-            if frame is None:
-                time.sleep(0.01)
-                continue
-            results = model.predict(frame, imgsz=320, conf=0.4, verbose=False, device="cpu")
-            boxes = []
-            detections = []
-            for result in results:
-                for box in result.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    conf = float(box.conf[0])
-                    label = f"{model.names[int(box.cls[0])]} {conf:.0%}"
-                    boxes.append((x1, y1, x2, y2, label))
-                    detections.append({
-                        "label": model.names[int(box.cls[0])],
-                        "confidence": round(conf, 2),
-                    })
-            with boxes_lock:
-                last_boxes[:] = boxes
-            with detections_lock:
-                latest_detections = detections
-            count += 1
-            elapsed = time.time() - t0
-            if elapsed >= 2.0:
-                fps_yolo = round(count / elapsed, 1)
-                count, t0 = 0, time.time()
-            current_labels = {d["label"] for d in detections}
-            if current_labels != last_labels:
-                event = {
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    "objects": detections,
-                }
+            if shm is None:
+                try:
+                    shm = SharedMemory(name=SHM_NAME, create=False)
+                    print("[brain_reader] Connected to shared memory.")
+                except FileNotFoundError:
+                    time.sleep(0.5)
+                    continue
+
+            n, seq = struct.unpack_from("<II", shm.buf, 0)
+
+            if seq != last_seq and 0 < n < shm.size - 8:
+                jpeg = bytes(shm.buf[8:8 + n])
+                with frame_lock:
+                    latest_frame = jpeg
+                last_seq = seq
+                count += 1
+                elapsed = time.time() - t0
+                if elapsed >= 2.0:
+                    fps_stream = round(count / elapsed, 1)
+                    count, t0 = 0, time.time()
+
+            try:
+                with open(STATE_FILE) as f:
+                    state = json.load(f)
+                detections = state.get("current_detections", [])
                 with detections_lock:
-                    detection_history.appendleft(event)
-                push_sse(event)
-                last_labels = current_labels
-        except Exception as e:
-            print(f"[detection_loop error] {e}", flush=True)
-            time.sleep(0.1)
+                    latest_detections = detections
+                fps_camera = state.get("fps_camera", 0.0)
+                fps_yolo   = state.get("fps_yolo",   0.0)
 
+                current_labels = {d["label"] for d in detections}
+                if current_labels != last_labels:
+                    event = {
+                        "timestamp": state.get("det_timestamp",
+                                               datetime.now().strftime("%H:%M:%S")),
+                        "objects": detections,
+                    }
+                    with detections_lock:
+                        detection_history.appendleft(event)
+                    push_sse(event)
+                    last_labels = current_labels
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
 
-def stream_loop():
-    global latest_frame, fps_stream
-    count, t0 = 0, time.time()
-    while True:
-        try:
-            with raw_frame_lock:
-                frame = raw_frame
-            if frame is None:
-                time.sleep(0.01)
-                continue
-            bgr = frame  # treat RGB as BGR — swaps R↔B in stream per user preference
-            with boxes_lock:
-                boxes = list(last_boxes)
-            bgr = draw_boxes(bgr, boxes)
-            _, jpeg = cv2.imencode(
-                ".jpg", bgr,
-                [cv2.IMWRITE_JPEG_QUALITY, 70, cv2.IMWRITE_JPEG_OPTIMIZE, 1]
-            )
-            with frame_lock:
-                latest_frame = jpeg.tobytes()
-            count += 1
-            elapsed = time.time() - t0
-            if elapsed >= 2.0:
-                fps_stream = round(count / elapsed, 1)
-                count, t0 = 0, time.time()
-            time.sleep(0.0417)
+            time.sleep(0.033)
+
         except Exception as e:
-            print(f"[stream_loop error] {e}", flush=True)
-            time.sleep(0.1)
+            print(f"[brain_reader] {e}", flush=True)
+            if shm:
+                try: shm.close()
+                except: pass
+                shm = None
+            time.sleep(1)
 
 
 def generate():
@@ -1697,10 +1621,6 @@ def index():
 
 
 if __name__ == "__main__":
-    load_model()
-    start_camera()
-    threading.Thread(target=camera_loop, daemon=True).start()
-    threading.Thread(target=detection_loop, daemon=True).start()
-    threading.Thread(target=stream_loop, daemon=True).start()
+    threading.Thread(target=brain_reader_loop, daemon=True).start()
     print("Stream live at http://0.0.0.0:8000")
     app.run(host="0.0.0.0", port=8000, threaded=True)

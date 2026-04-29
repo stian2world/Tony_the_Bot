@@ -1,0 +1,11 @@
+# Discord bot with voice recording support
+discord.py[voice]>=2.3.0
+
+# Local speech-to-text (runs on Pi without internet)
+openai-whisper>=20231117
+
+# Required by discord.py voice for encryption
+PyNaCl>=1.5.0
+
+# Audio array math (likely already installed via numpy/whisper)
+numpy>=1.21.0
