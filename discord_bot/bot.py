@@ -280,6 +280,16 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
+    # DM: answer directly with Groq
+    if isinstance(message.channel, discord.DMChannel):
+        question = message.content.strip()
+        if question and not question.startswith("!"):
+            async with message.channel.typing():
+                answer, _ = await _tony_reply(question)
+            await message.reply(f"💡 **Tony**:\n{answer}")
+        await bot.process_commands(message)
+        return
+
     # Professor replied to one of Tony's pending question messages
     if (message.author.id in Config.PROFESSOR_IDS
             and message.reference
