@@ -149,14 +149,19 @@ async def transcription_loop():
 
 
 async def _process_transcript(uid: int, sess: dict, text: str):
-    ch = bot.get_channel(Config.QUESTIONS_CHANNEL_ID)
+    user = bot.get_user(uid)
 
     if sess["state"] == "idle":
         if Config.START_PHRASE in text:
             sess["state"] = "recording"
             sess["transcript"] = ""
-            if ch:
-                await ch.send(f"🎙️ **{sess['display_name']}** is asking a question…")
+        else:
+            # Not a question — DM the user a markdown transcript of what they said
+            if user:
+                try:
+                    await user.send(f"📝 **Transcript:**\n> {text}")
+                except discord.Forbidden:
+                    pass
 
     elif sess["state"] == "recording":
         clean = text.replace(Config.START_PHRASE, "").strip()
@@ -167,17 +172,18 @@ async def _process_transcript(uid: int, sess: dict, text: str):
             sess["state"] = "idle"
             sess["transcript"] = ""
 
-            if question_text and ch:
+            if question_text and user:
                 qid = qa.add_question(sess["display_name"], uid, question_text)
-                await ch.send(
-                    f"❓ **Question #{qid}** from **{sess['display_name']}**:\n"
-                    f"> {question_text}"
-                )
-                async with ch.typing():
-                    answer, from_cache = await _tony_reply(question_text)
+                answer, from_cache = await _tony_reply(question_text)
                 qa.answer_question(qid, answer, "Tony (AI)")
-                cache_note = " *(similar question answered before)*" if from_cache else ""
-                await ch.send(f"💡 **Tony's answer**{cache_note}:\n{answer}")
+                cache_note = " *(answered before)*" if from_cache else ""
+                try:
+                    await user.send(
+                        f"🎙️ **You asked:** {question_text}\n\n"
+                        f"💡 **Tony's answer**{cache_note}:\n{answer}"
+                    )
+                except discord.Forbidden:
+                    pass
                 if sess.get("channel_id"):
                     await speak_in_vc(sess["channel_id"], answer)
         else:
