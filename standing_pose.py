@@ -19,28 +19,17 @@ import json
 import os
 from adafruit_servokit import ServoKit
 
-MAP_FILE = os.path.join(os.path.dirname(__file__), "servo_map.json")
-PULSE    = (500, 2500)
-SPEED    = 0.012  # seconds per degree step
+MAP_FILE   = os.path.join(os.path.dirname(__file__), "servo_map.json")
+POSES_FILE = os.path.join(os.path.dirname(__file__), "poses.json")
+PULSE      = (500, 2500)
+SPEED      = 0.012  # seconds per degree step
 
-# ── TUNE THESE ANGLES ──────────────────────────────────────────────
-# Right side legs (1, 3, 5) — board 0x40
-# Left side legs  (2, 4, 6) — board 0x41
-# Start at 90 for all, then adjust femur/tibia until Tony stands level.
-
-POSE = {
-    # leg: { joint: angle }
-    # tony_flat — baseline resting pose
-    1: {"coxa": 120, "femur": 105, "tibia": 90},
-    2: {"coxa": 90,  "femur": 75,  "tibia": 115},
-    3: {"coxa": 102, "femur": 110, "tibia": 85},
-    4: {"coxa": 95,  "femur": 100, "tibia": 114},
-    5: {"coxa": 115, "femur": 89,  "tibia": 92},
-    6: {"coxa": 80,  "femur": 95,  "tibia": 121},
-}
+with open(POSES_FILE) as _f:
+    _poses = json.load(_f)
+_flat_legs = _poses.get("tony_flat", {}).get("legs", {})
+POSE = {leg: {j: _flat_legs.get(str(leg), {}).get(j, 90) for j in ("coxa","femur","tibia")} for leg in range(1,7)}
 
 HEAD = {"tilt": 90, "pan": 90}
-# ───────────────────────────────────────────────────────────────────
 
 
 _kits = {}
@@ -84,34 +73,23 @@ def stand():
     print("  TONY STANDING POSE")
     print("=" * 50)
 
-    # Move all to current position (90°) first to avoid jerks
-    print("\nCentering all joints...")
-    for (leg, joint), (board, ch) in leg_map.items():
-        get_kit(board).servo[ch].angle = 90
-    for joint, (board, ch) in head_map.items():
-        get_kit(board).servo[ch].angle = 90
-    time.sleep(1.0)
+    print("\nMoving to tony_flat pose...")
 
-    # Move to standing pose
-    print("Moving to standing pose...")
-
-    # Move femurs first (lift body), then tibias (plant feet), then coxas
-    for j in ["femur", "tibia", "coxa"]:
+    for j in ["coxa", "femur", "tibia"]:
         for leg in range(1, 7):
             if (leg, j) not in leg_map:
                 continue
             board, ch = leg_map[(leg, j)]
             target = POSE[leg][j]
-            kit = get_kit(board)
-            smooth_move(kit, ch, 90, target)
+            get_kit(board).servo[ch].angle = target
 
     # Center head
     for joint, (board, ch) in head_map.items():
         target = HEAD.get(joint, 90)
         get_kit(board).servo[ch].angle = target
 
-    print("\nTony is in standing pose.")
-    print("Observe the stance and tune POSE angles in this file if needed.")
+    print("\nTony is in tony_flat pose.")
+    print("Run pose_tuner.py to tune from here.")
     print("\nLeg layout:")
     print("     FRONT")
     print("  1       2")

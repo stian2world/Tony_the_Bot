@@ -33,5 +33,40 @@
         "tibia": 121
       }
     }
+  },
+  "tony_stand": {
+    "description": "tony_stand pose",
+    "legs": {
+      "1": {
+        "coxa": 120,
+        "femur": 80,
+        "tibia": 0
+      },
+      "2": {
+        "coxa": 90,
+        "femur": 100,
+        "tibia": 180
+      },
+      "3": {
+        "coxa": 102,
+        "femur": 80,
+        "tibia": 0
+      },
+      "4": {
+        "coxa": 95,
+        "femur": 120,
+        "tibia": 180
+      },
+      "5": {
+        "coxa": 115,
+        "femur": 80,
+        "tibia": 20
+      },
+      "6": {
+        "coxa": 80,
+        "femur": 110,
+        "tibia": 180
+      }
+    }
   }
 }
