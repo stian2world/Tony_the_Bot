@@ -1,7 +1,11 @@
 import numpy as np
-import whisper
-
 from config import Config
+
+try:
+    import whisper
+    _WHISPER_AVAILABLE = True
+except ImportError:
+    _WHISPER_AVAILABLE = False
 
 # Discord sends PCM: 16-bit signed int, 48 kHz, stereo (2 ch)
 _DISCORD_RATE   = 48000
@@ -14,12 +18,18 @@ _MIN_BYTES      = int(_DISCORD_RATE * _BYTES_PER_SAMPLE * _MIN_SECONDS)
 
 class Transcriber:
     def __init__(self):
+        if not _WHISPER_AVAILABLE:
+            print("[Transcriber] whisper not installed — voice transcription disabled.")
+            self.model = None
+            return
         print(f"[Transcriber] Loading whisper model '{Config.WHISPER_MODEL}'…")
         self.model = whisper.load_model(Config.WHISPER_MODEL)
         print("[Transcriber] Ready.")
 
     def transcribe(self, pcm_bytes: bytes) -> str:
         """Return text for a raw PCM chunk, or '' if chunk is too short."""
+        if self.model is None:
+            return ""
         if len(pcm_bytes) < _MIN_BYTES:
             return ""
 
