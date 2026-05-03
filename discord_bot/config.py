@@ -1,27 +1,36 @@
 import os
 
+
 class Config:
     # ── Required ───────────────────────────────────────────────────────────────
     DISCORD_TOKEN: str = os.getenv("DISCORD_TOKEN", "")
+    GROQ_API_KEY:  str = os.getenv("GROQ_API_KEY", "")
 
-    # Text channel where questions and answers are posted
-    QUESTIONS_CHANNEL_ID: int = int(os.getenv("QUESTIONS_CHANNEL_ID", "0"))
+    # Text channel where Q&A is posted and students can type questions
+    QUESTIONS_CHANNEL_ID: int = int(os.getenv("QUESTIONS_CHANNEL_ID", "1470571362287358090"))
+
+    # General channel — Tony only replies if @mentioned here
+    GENERAL_CHANNEL_ID: int = int(os.getenv("GENERAL_CHANNEL_ID", "1470571362287358089"))
+
+    # ── Voice channels Tony auto-joins ─────────────────────────────────────────
+    # Both "1 on 1 with Tony" slots; add more IDs separated by commas if needed
+    _vc_env = os.getenv("VOICE_CHANNEL_IDS", "1470571362572701770,1470571362572701771")
+    VOICE_CHANNEL_IDS: set[int] = {int(i) for i in _vc_env.split(",") if i.strip()}
+
+    # Legacy single-channel env var still respected if set
+    _legacy = os.getenv("VOICE_CHANNEL_ID", "0")
+    if int(_legacy):
+        VOICE_CHANNEL_IDS.add(int(_legacy))
+
+    # ── Figurate personality ───────────────────────────────────────────────────
+    FIGURATE_API_KEY:      str = os.getenv("FIGURATE_API_KEY", "")
+    FIGURATE_CHARACTER_ID: str = os.getenv("FIGURATE_CHARACTER_ID", "cmo36774e00dcqq0cpin053mi")
 
     # ── Optional ───────────────────────────────────────────────────────────────
-    # Voice channel to auto-join when a student connects (0 = disabled, use !join)
-    VOICE_CHANNEL_ID: int = int(os.getenv("VOICE_CHANNEL_ID", "0"))
-
-    # Whisper model: "tiny" (fastest, ~39MB), "base" (balanced, ~74MB)
-    # "small" is too slow for Pi — stick with tiny or base
+    GROQ_MODEL:    str = os.getenv("GROQ_MODEL", "llama3-8b-8192")
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "base")
-
-    # SQLite file path
-    DB_PATH: str = os.getenv("DB_PATH", "qa_questions.db")
-
-    # How many seconds of audio to accumulate before each Whisper pass
-    # Higher = less CPU load, slower trigger detection; lower = faster but heavier
+    DB_PATH:       str = os.getenv("DB_PATH", "qa_questions.db")
     CHUNK_SECONDS: int = int(os.getenv("CHUNK_SECONDS", "5"))
 
-    # Trigger phrases (lowercase — matched anywhere in the transcription)
     START_PHRASE: str = "i have a question"
-    STOP_PHRASE: str  = "thank you"
+    STOP_PHRASE:  str = "thank you"
