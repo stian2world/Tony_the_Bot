@@ -8,10 +8,14 @@ General     : Tony only replies when @mentioned
 """
 
 import asyncio
+import os
+import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 import discord
+from elevenlabs.client import ElevenLabs
+from elevenlabs import VoiceSettings
 from discord.ext import commands, tasks
 
 from config import Config
@@ -43,10 +47,11 @@ _MIN_PCM_BYTES = 48000 * 2 * 2 // 2
 
 # Per-voice-channel state: channel_id → {vc, sink}
 active_vcs: dict[int, dict] = {}
+_joining = False
 
 # Per-user voice session state
 def _blank_session():
-    return {"state": "idle", "buffer": bytearray(), "transcript": "", "display_name": "Student"}
+    return {"state": "idle", "buffer": bytearray(), "transcript": "", "display_name": "Student", "channel_id": None}
 
 sessions: dict[int, dict] = defaultdict(_blank_session)
 
@@ -59,6 +64,52 @@ async def _tony_reply(question: str) -> str:
     prior = similar.answer_text if similar else ""
     answer = await loop.run_in_executor(None, tony.ask, question, prior)
     return answer, bool(similar)
+
+
+# ── TTS helper ────────────────────────────────────────────────────────────────
+_eleven = ElevenLabs(api_key=Config.ELEVENLABS_API_KEY)
+
+async def speak_in_vc(channel_id: int, text: str):
+    state = active_vcs.get(channel_id)
+    if not state or not state["vc"].is_connected():
+        return
+    vc = state["vc"]
+
+    try:
+        vc.stop_recording()
+    except Exception:
+        pass
+
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        tmp_path = f.name
+
+    try:
+        loop = asyncio.get_event_loop()
+        audio = await loop.run_in_executor(None, lambda: b"".join(
+            _eleven.text_to_speech.convert(
+                text=text,
+                voice_id=Config.ELEVENLABS_VOICE_ID,
+                model_id="eleven_monolingual_v1",
+                voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75),
+            )
+        ))
+        with open(tmp_path, "wb") as f:
+            f.write(audio)
+
+        if not vc.is_playing():
+            source = discord.FFmpegPCMAudio(tmp_path)
+            vc.play(source)
+            while vc.is_playing():
+                await asyncio.sleep(0.5)
+    finally:
+        os.unlink(tmp_path)
+
+    sink = TonySink()
+    state["sink"] = sink
+    try:
+        vc.start_recording(sink, _on_recording_done)
+    except Exception:
+        pass
 
 
 # ── Custom PCM sink ────────────────────────────────────────────────────────────
@@ -123,18 +174,34 @@ async def _process_transcript(uid: int, sess: dict, text: str):
                 qa.answer_question(qid, answer, "Tony (AI)")
                 cache_note = " *(similar question answered before)*" if from_cache else ""
                 await ch.send(f"💡 **Tony's answer**{cache_note}:\n{answer}")
+                if sess.get("channel_id"):
+                    await speak_in_vc(sess["channel_id"], answer)
         else:
             sess["transcript"] += " " + clean.strip(" .,!?")
 
 
 # ── Voice helpers ──────────────────────────────────────────────────────────────
 async def join_voice(channel: discord.VoiceChannel):
+    global _joining
     cid = channel.id
     if cid in active_vcs and active_vcs[cid]["vc"].is_connected():
         return
-    vc = await channel.connect()
+    _joining = True
+    try:
+        for vc_existing in list(bot.voice_clients):
+            if vc_existing.guild == channel.guild:
+                try:
+                    await vc_existing.disconnect(force=True)
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+        vc = await channel.connect()
+    finally:
+        _joining = False
+    await asyncio.sleep(3)
     sink = TonySink()
-    vc.start_recording(sink, _on_recording_done)
+    if vc.is_connected():
+        vc.start_recording(sink, _on_recording_done)
     active_vcs[cid] = {"vc": vc, "sink": sink}
     if not transcription_loop.is_running():
         transcription_loop.start()
@@ -145,8 +212,10 @@ async def leave_voice(channel_id: int):
     state = active_vcs.pop(channel_id, None)
     if state:
         vc = state["vc"]
-        if vc.is_recording():
+        try:
             vc.stop_recording()
+        except Exception:
+            pass
         if vc.is_connected():
             await vc.disconnect()
     if not active_vcs and transcription_loop.is_running():
@@ -167,10 +236,20 @@ async def on_voice_state_update(member: discord.Member, before, after):
 
     if after.channel and after.channel.id in Config.VOICE_CHANNEL_IDS:
         sessions[member.id]["display_name"] = member.display_name
-        await join_voice(after.channel)
+        sessions[member.id]["channel_id"] = after.channel.id
+        try:
+            await join_voice(after.channel)
+        except Exception as exc:
+            print(f"[Tony] Failed to join voice: {exc}")
 
     if before.channel and before.channel.id in Config.VOICE_CHANNEL_IDS:
+        print(f"[Debug] {member.display_name} left {before.channel.name}, _joining={_joining}")
+        await asyncio.sleep(2)
+        if _joining:
+            print(f"[Debug] Skipping leave — still joining")
+            return
         non_bots = [m for m in before.channel.members if not m.bot]
+        print(f"[Debug] Non-bots in channel: {[m.display_name for m in non_bots]}")
         if not non_bots:
             await leave_voice(before.channel.id)
 
@@ -316,3 +395,4 @@ if __name__ == "__main__":
     if not Config.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not set.")
     bot.run(Config.DISCORD_TOKEN)
+
