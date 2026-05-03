@@ -12,6 +12,9 @@ import struct
 from multiprocessing.shared_memory import SharedMemory
 from collections import deque
 from datetime import datetime
+import board
+import neopixel
+from led_battery import update_leds, read_battery_pct, LED_PIN, LED_COUNT, BRIGHTNESS
 
 # Shared memory layout: [size:4][seq:4][jpeg:N]
 SHM_NAME   = "tony_frame"
@@ -248,12 +251,24 @@ def encode_loop():
             time.sleep(0.1)
 
 
+def battery_loop():
+    pixels = neopixel.NeoPixel(LED_PIN, LED_COUNT, brightness=BRIGHTNESS, auto_write=False)
+    while True:
+        try:
+            pct, _ = read_battery_pct()
+            update_leds(pixels, pct)
+        except Exception as e:
+            print(f"[battery_loop] {e}", flush=True)
+        time.sleep(10)
+
+
 if __name__ == "__main__":
     load_model()
     start_camera()
     threading.Thread(target=camera_loop,    daemon=True).start()
     threading.Thread(target=detection_loop, daemon=True).start()
     threading.Thread(target=encode_loop,    daemon=True).start()
+    threading.Thread(target=battery_loop,   daemon=True).start()
     print("Tony Brain running — shm='tony_frame', state='/tmp/tony_state.json'")
     try:
         while True:

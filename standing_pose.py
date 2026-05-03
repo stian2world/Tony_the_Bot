@@ -30,14 +30,13 @@ SPEED    = 0.012  # seconds per degree step
 
 POSE = {
     # leg: { joint: angle }
-    # Right side (1, 3, 5) — board 0x40
-    1: {"coxa": 90, "femur": 105, "tibia": 55},
-    3: {"coxa": 90, "femur": 105, "tibia": 55},
-    5: {"coxa": 90, "femur": 105, "tibia": 55},
-    # Left side (2, 4, 6) — board 0x41 (mirrored mounting)
-    2: {"coxa": 90, "femur": 60, "tibia": 145},
-    4: {"coxa": 90, "femur": 75, "tibia": 130},
-    6: {"coxa": 90, "femur": 75, "tibia": 130},
+    # tony_flat — baseline resting pose
+    1: {"coxa": 120, "femur": 105, "tibia": 90},
+    2: {"coxa": 90,  "femur": 75,  "tibia": 115},
+    3: {"coxa": 102, "femur": 110, "tibia": 85},
+    4: {"coxa": 95,  "femur": 100, "tibia": 114},
+    5: {"coxa": 115, "femur": 89,  "tibia": 92},
+    6: {"coxa": 80,  "femur": 95,  "tibia": 121},
 }
 
 HEAD = {"tilt": 90, "pan": 90}
