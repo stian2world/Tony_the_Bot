@@ -19,8 +19,8 @@ HOLD_SECS  = 1.5   # how long to hold the test angle
 
 # Channels to scan — starts after leg channels (0-8) on each board
 SCAN = [
-    (0x40, list(range(9, 16))),   # board 0x40 channels 9-15
-    (0x41, list(range(9, 16))),   # board 0x41 channels 9-15
+    (0x40, [0, 1]),   # board 0x40 channels 0-1
+    (0x41, [0, 1]),   # board 0x41 channels 0-1
 ]
 
 _kits = {}
