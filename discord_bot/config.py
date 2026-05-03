@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 class Config:
@@ -25,6 +28,10 @@ class Config:
     # ── Figurate personality ───────────────────────────────────────────────────
     FIGURATE_API_KEY:      str = os.getenv("FIGURATE_API_KEY", "")
     FIGURATE_CHARACTER_ID: str = os.getenv("FIGURATE_CHARACTER_ID", "cmo36774e00dcqq0cpin053mi")
+
+    # ── ElevenLabs TTS ────────────────────────────────────────────────────────
+    ELEVENLABS_API_KEY:  str = os.getenv("ELEVENLABS_API_KEY", "")
+    ELEVENLABS_VOICE_ID: str = os.getenv("ELEVENLABS_VOICE_ID", "")
 
     # ── Optional ───────────────────────────────────────────────────────────────
     GROQ_MODEL:    str = os.getenv("GROQ_MODEL", "llama3-8b-8192")
