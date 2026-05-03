@@ -104,12 +104,13 @@ async def speak_in_vc(channel_id: int, text: str):
     finally:
         os.unlink(tmp_path)
 
-    sink = TonySink()
-    state["sink"] = sink
-    try:
-        vc.start_recording(sink, _on_recording_done)
-    except Exception:
-        pass
+    if hasattr(vc, "start_recording"):
+        sink = TonySink()
+        state["sink"] = sink
+        try:
+            vc.start_recording(sink, _on_recording_done)
+        except Exception:
+            pass
 
 
 # ── Custom PCM sink ────────────────────────────────────────────────────────────
@@ -203,9 +204,12 @@ async def join_voice(channel: discord.VoiceChannel):
         _joining = False
     await asyncio.sleep(3)
     sink = TonySink()
-    if vc.is_connected():
-        vc.start_recording(sink, _on_recording_done)
     active_vcs[cid] = {"vc": vc, "sink": sink}
+    if vc.is_connected() and hasattr(vc, "start_recording"):
+        try:
+            vc.start_recording(sink, _on_recording_done)
+        except Exception as exc:
+            print(f"[Tony] Recording not available: {exc}")
     if not transcription_loop.is_running():
         transcription_loop.start()
     print(f"[Tony] Joined '{channel.name}'")
