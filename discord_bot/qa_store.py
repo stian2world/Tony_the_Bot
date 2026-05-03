@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import datetime
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from typing import Optional, List
 
 
@@ -73,6 +74,19 @@ class QAStore:
                 "SELECT * FROM questions WHERE id=?", (question_id,)
             ).fetchone()
             return Question(**dict(row)) if row else None
+
+    def find_similar(self, question_text: str, threshold: float = 0.55) -> Optional["Question"]:
+        """Return the most similar answered question, or None if none exceed the threshold."""
+        answered = [q for q in self.get_all(limit=100) if q.answer_text]
+        if not answered:
+            return None
+        q_lower = question_text.lower()
+        best_score, best_q = 0.0, None
+        for q in answered:
+            score = SequenceMatcher(None, q_lower, q.question_text.lower()).ratio()
+            if score > best_score:
+                best_score, best_q = score, q
+        return best_q if best_score >= threshold else None
 
     def get_all(self, limit: int = 10) -> List[Question]:
         with self._connect() as conn:
