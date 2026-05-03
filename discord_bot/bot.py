@@ -211,11 +211,13 @@ async def join_voice(channel: discord.VoiceChannel):
     await asyncio.sleep(3)
     sink = TonySink()
     active_vcs[cid] = {"vc": vc, "sink": sink}
+    print(f"[Tony] has start_recording: {hasattr(vc, 'start_recording')}, opus loaded: {discord.opus.is_loaded()}")
     if vc.is_connected() and hasattr(vc, "start_recording"):
         try:
             vc.start_recording(sink, _on_recording_done)
+            print("[Tony] Recording started.")
         except Exception as exc:
-            print(f"[Tony] Recording not available: {exc}")
+            print(f"[Tony] Recording failed: {exc}")
     if not transcription_loop.is_running():
         transcription_loop.start()
     print(f"[Tony] Joined '{channel.name}'")
