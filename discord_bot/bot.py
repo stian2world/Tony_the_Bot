@@ -254,6 +254,10 @@ async def on_voice_state_update(member: discord.Member, before, after):
             await leave_voice(before.channel.id)
 
 
+# pending_questions: maps Tony's message ID → {student_message, question_text, qid}
+pending_questions: dict[int, dict] = {}
+
+
 # ── Text message handler ───────────────────────────────────────────────────────
 @bot.event
 async def on_message(message: discord.Message):
@@ -261,24 +265,48 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # tonys-chat-room: respond to every message
-    if message.channel.id == Config.QUESTIONS_CHANNEL_ID:
+    # Professor replied to one of Tony's pending question messages
+    if (message.author.id in Config.PROFESSOR_IDS
+            and message.reference
+            and message.reference.message_id in pending_questions):
+        pending = pending_questions.pop(message.reference.message_id)
+        answer = message.content.strip()
+        qa.answer_question(pending["qid"], answer, message.author.display_name)
+        student_msg = pending["student_message"]
+        await student_msg.reply(f"💡 **Professor {message.author.display_name}** answered:\n{answer}")
+        await bot.process_commands(message)
+        return
+
+    # General channel: any student message triggers the Q&A flow
+    if message.channel.id == Config.GENERAL_CHANNEL_ID and not message.author.bot:
         question = message.content.strip()
         if not question or question.startswith("!"):
             await bot.process_commands(message)
             return
-        async with message.channel.typing():
-            answer, from_cache = await _tony_reply(question)
-        cache_note = " *(similar question answered before)*" if from_cache else ""
-        await message.reply(f"💡 **Tony**{cache_note}:\n{answer}")
 
-    # general channel: only reply when @mentioned
-    elif message.channel.id == Config.GENERAL_CHANNEL_ID and bot.user in message.mentions:
-        question = message.content.replace(f"<@{bot.user.id}>", "").strip()
-        if question:
-            async with message.channel.typing():
-                answer, _ = await _tony_reply(question)
-            await message.reply(f"💡 **Tony**:\n{answer}")
+        # Check cache first
+        loop = asyncio.get_event_loop()
+        similar = await loop.run_in_executor(None, qa.find_similar, question)
+        if similar:
+            await message.reply(
+                f"💡 **Tony** *(answered before)*:\n{similar.answer_text}"
+            )
+            await bot.process_commands(message)
+            return
+
+        # No cache — ask the professor
+        qid = qa.add_question(message.author.display_name, message.author.id, question)
+        await message.reply("⏳ Great question! Let me check with the professor — please wait a moment.")
+        prof_mention = " ".join(f"<@{pid}>" for pid in Config.PROFESSOR_IDS)
+        tony_msg = await message.channel.send(
+            f"{prof_mention} **{message.author.display_name}** asks:\n> {question}\n"
+            f"Please reply to this message with your answer."
+        )
+        pending_questions[tony_msg.id] = {
+            "student_message": message,
+            "question_text": question,
+            "qid": qid,
+        }
 
     await bot.process_commands(message)
 
