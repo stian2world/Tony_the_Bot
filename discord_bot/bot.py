@@ -13,6 +13,9 @@ import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+# py-cord uses get_event_loop() which requires an explicit loop in Python 3.14+
+asyncio.set_event_loop(asyncio.new_event_loop())
+
 import discord
 from elevenlabs.client import ElevenLabs
 from elevenlabs import VoiceSettings
@@ -23,6 +26,22 @@ from figurate_client import fetch_tony_system_prompt
 from groq_client import TonyGroq
 from qa_store import QAStore
 from transcriber import Transcriber
+
+# ── Load opus ─────────────────────────────────────────────────────────────────
+if not discord.opus.is_loaded():
+    for _opus_path in [
+        "libopus.dylib",
+        "/opt/homebrew/lib/libopus.dylib",
+        "/usr/local/lib/libopus.dylib",
+    ]:
+        try:
+            discord.opus.load_opus(_opus_path)
+            print(f"[Tony] Opus loaded from {_opus_path}")
+            break
+        except Exception:
+            continue
+    if not discord.opus.is_loaded():
+        print("[Tony] WARNING: opus not found — voice recording disabled. Run: brew install opus")
 
 # ── Bootstrap ──────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -104,16 +123,20 @@ async def speak_in_vc(channel_id: int, text: str):
     finally:
         os.unlink(tmp_path)
 
-    sink = TonySink()
-    state["sink"] = sink
-    try:
-        vc.start_recording(sink, _on_recording_done)
-    except Exception:
-        pass
+    if hasattr(vc, "start_recording"):
+        sink = TonySink()
+        state["sink"] = sink
+        try:
+            vc.start_recording(sink, _on_recording_done)
+        except Exception:
+            pass
 
 
 # ── Custom PCM sink ────────────────────────────────────────────────────────────
-class TonySink(discord.sinks.Sink):
+_SinkBase = getattr(discord, "sinks", None)
+_SinkBase = _SinkBase.Sink if _SinkBase else object
+
+class TonySink(_SinkBase):
     def write(self, data: bytes, user) -> None:
         uid = user.id if hasattr(user, "id") else int(user)
         sessions[uid]["buffer"] += data
@@ -145,14 +168,19 @@ async def transcription_loop():
 
 
 async def _process_transcript(uid: int, sess: dict, text: str):
-    ch = bot.get_channel(Config.QUESTIONS_CHANNEL_ID)
+    user = bot.get_user(uid)
 
     if sess["state"] == "idle":
         if Config.START_PHRASE in text:
             sess["state"] = "recording"
             sess["transcript"] = ""
-            if ch:
-                await ch.send(f"🎙️ **{sess['display_name']}** is asking a question…")
+        else:
+            # Not a question — DM the user a markdown transcript of what they said
+            if user:
+                try:
+                    await user.send(f"📝 **Transcript:**\n> {text}")
+                except discord.Forbidden:
+                    pass
 
     elif sess["state"] == "recording":
         clean = text.replace(Config.START_PHRASE, "").strip()
@@ -163,17 +191,18 @@ async def _process_transcript(uid: int, sess: dict, text: str):
             sess["state"] = "idle"
             sess["transcript"] = ""
 
-            if question_text and ch:
+            if question_text and user:
                 qid = qa.add_question(sess["display_name"], uid, question_text)
-                await ch.send(
-                    f"❓ **Question #{qid}** from **{sess['display_name']}**:\n"
-                    f"> {question_text}"
-                )
-                async with ch.typing():
-                    answer, from_cache = await _tony_reply(question_text)
+                answer, from_cache = await _tony_reply(question_text)
                 qa.answer_question(qid, answer, "Tony (AI)")
-                cache_note = " *(similar question answered before)*" if from_cache else ""
-                await ch.send(f"💡 **Tony's answer**{cache_note}:\n{answer}")
+                cache_note = " *(answered before)*" if from_cache else ""
+                try:
+                    await user.send(
+                        f"🎙️ **You asked:** {question_text}\n\n"
+                        f"💡 **Tony's answer**{cache_note}:\n{answer}"
+                    )
+                except discord.Forbidden:
+                    pass
                 if sess.get("channel_id"):
                     await speak_in_vc(sess["channel_id"], answer)
         else:
@@ -200,9 +229,15 @@ async def join_voice(channel: discord.VoiceChannel):
         _joining = False
     await asyncio.sleep(3)
     sink = TonySink()
-    if vc.is_connected():
-        vc.start_recording(sink, _on_recording_done)
     active_vcs[cid] = {"vc": vc, "sink": sink}
+    print(f"[Tony] vc type: {type(vc)}, has start_recording: {hasattr(vc, 'start_recording')}, opus loaded: {discord.opus.is_loaded()}")
+    print(f"[Tony] recording-related attrs: {[a for a in dir(vc) if 'record' in a.lower()]}")
+    if vc.is_connected() and hasattr(vc, "start_recording"):
+        try:
+            vc.start_recording(sink, _on_recording_done)
+            print("[Tony] Recording started.")
+        except Exception as exc:
+            print(f"[Tony] Recording failed: {exc}")
     if not transcription_loop.is_running():
         transcription_loop.start()
     print(f"[Tony] Joined '{channel.name}'")
@@ -265,6 +300,16 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
+    # DM: answer directly with Groq
+    if isinstance(message.channel, discord.DMChannel):
+        question = message.content.strip()
+        if question and not question.startswith("!"):
+            async with message.channel.typing():
+                answer, _ = await _tony_reply(question)
+            await message.reply(f"💡 **Tony**:\n{answer}")
+        await bot.process_commands(message)
+        return
+
     # Professor replied to one of Tony's pending question messages
     if (message.author.id in Config.PROFESSOR_IDS
             and message.reference
@@ -277,8 +322,20 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # General channel: any student message triggers the Q&A flow
-    if message.channel.id == Config.GENERAL_CHANNEL_ID and not message.author.bot:
+    # General channel: Tony answers everything directly with Groq
+    if message.channel.id == Config.GENERAL_CHANNEL_ID:
+        question = message.content.strip()
+        if not question or question.startswith("!"):
+            await bot.process_commands(message)
+            return
+        async with message.channel.typing():
+            answer, _ = await _tony_reply(question)
+        await message.reply(f"💡 **Tony**:\n{answer}")
+        await bot.process_commands(message)
+        return
+
+    # tonys-chat-room: professor Q&A flow
+    if message.channel.id == Config.QUESTIONS_CHANNEL_ID:
         question = message.content.strip()
         if not question or question.startswith("!"):
             await bot.process_commands(message)
@@ -288,13 +345,11 @@ async def on_message(message: discord.Message):
         loop = asyncio.get_event_loop()
         similar = await loop.run_in_executor(None, qa.find_similar, question)
         if similar:
-            await message.reply(
-                f"💡 **Tony** *(answered before)*:\n{similar.answer_text}"
-            )
+            await message.reply(f"💡 **Tony** *(answered before)*:\n{similar.answer_text}")
             await bot.process_commands(message)
             return
 
-        # No cache — ask the professor
+        # No cache — ping the professor
         qid = qa.add_question(message.author.display_name, message.author.id, question)
         await message.reply("⏳ Great question! Let me check with the professor — please wait a moment.")
         prof_mention = " ".join(f"<@{pid}>" for pid in Config.PROFESSOR_IDS)
