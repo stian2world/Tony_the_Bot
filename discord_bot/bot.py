@@ -13,6 +13,9 @@ import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
+# py-cord uses get_event_loop() which requires an explicit loop in Python 3.14+
+asyncio.set_event_loop(asyncio.new_event_loop())
+
 import discord
 from elevenlabs.client import ElevenLabs
 from elevenlabs import VoiceSettings
