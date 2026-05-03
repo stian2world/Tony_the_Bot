@@ -24,6 +24,22 @@ from groq_client import TonyGroq
 from qa_store import QAStore
 from transcriber import Transcriber
 
+# ── Load opus ─────────────────────────────────────────────────────────────────
+if not discord.opus.is_loaded():
+    for _opus_path in [
+        "libopus.dylib",
+        "/opt/homebrew/lib/libopus.dylib",
+        "/usr/local/lib/libopus.dylib",
+    ]:
+        try:
+            discord.opus.load_opus(_opus_path)
+            print(f"[Tony] Opus loaded from {_opus_path}")
+            break
+        except Exception:
+            continue
+    if not discord.opus.is_loaded():
+        print("[Tony] WARNING: opus not found — voice recording disabled. Run: brew install opus")
+
 # ── Bootstrap ──────────────────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
@@ -211,7 +227,8 @@ async def join_voice(channel: discord.VoiceChannel):
     await asyncio.sleep(3)
     sink = TonySink()
     active_vcs[cid] = {"vc": vc, "sink": sink}
-    print(f"[Tony] has start_recording: {hasattr(vc, 'start_recording')}, opus loaded: {discord.opus.is_loaded()}")
+    print(f"[Tony] vc type: {type(vc)}, has start_recording: {hasattr(vc, 'start_recording')}, opus loaded: {discord.opus.is_loaded()}")
+    print(f"[Tony] recording-related attrs: {[a for a in dir(vc) if 'record' in a.lower()]}")
     if vc.is_connected() and hasattr(vc, "start_recording"):
         try:
             vc.start_recording(sink, _on_recording_done)
