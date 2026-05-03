@@ -280,8 +280,20 @@ async def on_message(message: discord.Message):
         await bot.process_commands(message)
         return
 
-    # General channel: any student message triggers the Q&A flow
-    if message.channel.id == Config.GENERAL_CHANNEL_ID and not message.author.bot:
+    # General channel: Tony answers everything directly with Groq
+    if message.channel.id == Config.GENERAL_CHANNEL_ID:
+        question = message.content.strip()
+        if not question or question.startswith("!"):
+            await bot.process_commands(message)
+            return
+        async with message.channel.typing():
+            answer, _ = await _tony_reply(question)
+        await message.reply(f"💡 **Tony**:\n{answer}")
+        await bot.process_commands(message)
+        return
+
+    # tonys-chat-room: professor Q&A flow
+    if message.channel.id == Config.QUESTIONS_CHANNEL_ID:
         question = message.content.strip()
         if not question or question.startswith("!"):
             await bot.process_commands(message)
@@ -291,13 +303,11 @@ async def on_message(message: discord.Message):
         loop = asyncio.get_event_loop()
         similar = await loop.run_in_executor(None, qa.find_similar, question)
         if similar:
-            await message.reply(
-                f"💡 **Tony** *(answered before)*:\n{similar.answer_text}"
-            )
+            await message.reply(f"💡 **Tony** *(answered before)*:\n{similar.answer_text}")
             await bot.process_commands(message)
             return
 
-        # No cache — ask the professor
+        # No cache — ping the professor
         qid = qa.add_question(message.author.display_name, message.author.id, question)
         await message.reply("⏳ Great question! Let me check with the professor — please wait a moment.")
         prof_mention = " ".join(f"<@{pid}>" for pid in Config.PROFESSOR_IDS)
