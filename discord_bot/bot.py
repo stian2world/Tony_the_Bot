@@ -113,7 +113,10 @@ async def speak_in_vc(channel_id: int, text: str):
 
 
 # ── Custom PCM sink ────────────────────────────────────────────────────────────
-class TonySink(discord.sinks.Sink):
+_SinkBase = getattr(discord, "sinks", None)
+_SinkBase = _SinkBase.Sink if _SinkBase else object
+
+class TonySink(_SinkBase):
     def write(self, data: bytes, user) -> None:
         uid = user.id if hasattr(user, "id") else int(user)
         sessions[uid]["buffer"] += data
