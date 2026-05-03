@@ -202,7 +202,14 @@ def detection_loop():
                     name  = model.names[int(box.cls[0])]
                     label = f"{name} {conf:.0%}"
                     boxes.append((x1, y1, x2, y2, label))
-                    detections.append({"label": name, "confidence": round(conf, 2)})
+                    detections.append({
+                        "label": name,
+                        "confidence": round(conf, 2),
+                        "cx": (x1 + x2) // 2,
+                        "cy": (y1 + y2) // 2,
+                        "w": x2 - x1,
+                        "h": y2 - y1,
+                    })
             with boxes_lock:
                 last_boxes[:] = boxes
             with detections_lock:
