@@ -3200,3 +3200,65 @@ Empty — nobody was talking during that window, which is expected. The mic work
 Let me fix the service to log unbuffered, then watch live:
 
 ---
+
+---
+
+**[2026-05-03 15:46:50] User:**
+i just pull from the origin, lets familiarice with the new  updated files
+
+---
+
+**[2026-05-03 15:51:55] User:**
+yes lets do that
+
+---
+
+**[2026-05-03 15:53:19] User:**
+lets add a second proffessor id and dont over write the first one
+
+---
+
+**[2026-05-03 15:54:27] User:**
+this is the id :305823183695773696
+
+**[2026-05-03 15:54:52] Assistant:**
+Now push it to Tony and restart the Discord bot:
+
+---
+
+---
+
+**[2026-05-03 15:55:48] User:**
+now tony should be able to transcribe the questions it listens into the discord? can we make sure it does that?
+
+**[2026-05-03 15:56:53] Assistant:**
+Let me check the current log to see what's being transcribed right now:
+
+Whisper is transcribing perfectly — I can see it picked up "tony, have a..." and "question five have a question" and "what is 5 times 5?" but the trigger phrase got **split across two chunks**. "Tony" landed in one 3-second window and "I have a question" landed in the next, so neither chunk matched both conditions.
+
+The fix: keep a rolling buffer of the last 2 transcriptions and check the trigger against the combined text:
+
+Now add `prev_text = text` at the end of the loop so the rolling buffer updates each iteration:
+
+Push and restart:
+
+---
+
+---
+
+**[2026-05-03 15:59:06] User:**
+tony is not posting the question in the discord #tonys-chat-room
+
+**[2026-05-03 16:01:04] Assistant:**
+Let me check the log to see exactly what's happening:
+
+The log shows the trigger isn't firing because Whisper isn't transcribing the exact phrase `"i have a question"` — I can see it wrote `"tony, have a..."` and `"question five have a question"` instead. Whisper drops or scrambles words.
+
+The fix: make the trigger flexible — just require **"tony"** and **"question"** to appear anywhere in the window, not the exact full phrase:
+
+---
+
+---
+
+**[2026-05-03 16:01:57] User:**
+end session here

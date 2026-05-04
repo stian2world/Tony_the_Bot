@@ -29,7 +29,6 @@ CHANNELS        = 1
 CHUNK_SECONDS   = 3          # seconds per transcription chunk
 
 WAKE_WORD       = "tony"
-START_PHRASE    = "i have a question"
 STOP_PHRASE     = "thank you"
 
 STATE_FILE      = "/tmp/tony_state.json"   # written by tony_brain.py
@@ -159,8 +158,9 @@ def main():
     )
     print("[Tony] Listening for 'I have a question'…")
 
-    state    = "idle"
-    question = ""
+    state       = "idle"
+    question    = ""
+    prev_text   = ""   # previous chunk — lets trigger phrase span a chunk boundary
 
     try:
         while True:
@@ -171,16 +171,22 @@ def main():
             chunk = np.frombuffer(raw, dtype=np.int16)
             text  = transcribe(chunk)
             if not text:
+                prev_text = ""
                 continue
 
             print(f"[mic] {text}")
 
+            # Combined window: tail of previous chunk + current chunk
+            window = (prev_text + " " + text).strip()
+
             if state == "idle":
-                if WAKE_WORD in text and START_PHRASE in text:
+                # Trigger: hear "tony" and "question" anywhere in the rolling window
+                if WAKE_WORD in window and "question" in window:
                     state = "recording"
-                    # Strip everything up to and including the trigger phrase
-                    after = text.split(START_PHRASE, 1)[-1].strip(" .,!?")
+                    # Grab anything after "question" as the start of the question
+                    after = window.split("question", 1)[-1].strip(" .,!?")
                     question = after
+                    prev_text = ""
                     print("[Tony] Question started — tracking speaker…")
                     start_tracking()
                     discord_post("🎙️ **Student is asking a question…**")
@@ -191,6 +197,7 @@ def main():
                     question += " " + clean.split(STOP_PHRASE)[0].strip(" .,!?")
                     question = question.strip()
                     state = "idle"
+                    prev_text = ""
                     stop_tracking()
 
                     if question:
@@ -202,6 +209,8 @@ def main():
                     question = ""
                 else:
                     question += " " + clean
+
+            prev_text = text
     finally:
         proc.terminate()
 
